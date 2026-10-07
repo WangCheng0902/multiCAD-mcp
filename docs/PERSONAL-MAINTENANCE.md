@@ -3,15 +3,15 @@
 ## 仓库与分支
 
 - `upstream`：原作者 `AnCode666/multiCAD-mcp`，用于获取更新；本地已禁用向它推送。
-- `origin`：个人仓库 `WangCheng0902/multiCAD-mcp`。本地地址已设置，首次推送前须完成 GitHub Fork。
+- `origin`：个人仓库 `WangCheng0902/multiCAD-mcp`。Fork 已创建，个人分支已推送并设置远程跟踪。
 - `main`：保持与原作者主分支一致，本地跟踪 `upstream/main`。
 - `codex/personal-autocad`：个人开发分支，保留当前 CAD 线程调度、COM 读取保护和本机配置。
 
 当前代码是已有修改的备份，尚未完成 AutoCAD 实机回归测试。配置修改与代码修改分别提交，方便将来单独迁移或贡献通用修复。保留原项目 README、作者信息和许可证。
 
-## 首次完成 Fork 和推送
+## 已完成的 Fork 设置
 
-在 https://github.com/AnCode666/multiCAD-mcp/fork 创建 Fork，Owner 选择 `WangCheng0902`，名称保持 `multiCAD-mcp`。然后在项目目录执行：
+个人 Fork：https://github.com/WangCheng0902/multiCAD-mcp 。2026-10-07 已完成首次推送及分支跟踪配置。以下是初始化时使用的命令，无需重复执行：
 
 ```powershell
 git fetch origin
