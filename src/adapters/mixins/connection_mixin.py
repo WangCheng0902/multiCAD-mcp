@@ -72,6 +72,9 @@ class ConnectionMixin:
                     self.application = win32com.client.GetActiveObject(
                         self.config.prog_id
                     )
+                    if self.cad_type == "autocad":
+                        from adapters.com_read_guard import wrap
+                        self.application = wrap(self.application)
                     logger.info(
                         f"{self.cad_type} instance found (active via GetActiveObject)"
                     )

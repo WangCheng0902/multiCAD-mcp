@@ -254,14 +254,8 @@ class ViewMixin:
     def refresh_view(self) -> bool:
         """Refresh the view using multiple techniques for maximum compatibility.
 
-        Uses a combination of techniques in fallback order:
-        1. Application.Refresh() (COM API - no undo/redo impact)
-        2. SendCommand with REDRAW (most reliable visual update)
-        3. Window click simulation (forces UI update)
-
-        Note: REDRAW command is not wrapped in UNDO to avoid complicating
-        the undo/redo stack. If refresh_view is called during user operations,
-        the REDRAW will be undone by the user's undo command anyway.
+        Regenerate the exact active document synchronously through COM.
+        Do not issue an asynchronous command or move/click the user's pointer.
 
         Returns:
             True if refresh was attempted (best effort approach)
@@ -270,23 +264,11 @@ class ViewMixin:
             application = self._get_application("refresh_view")
             document = self._get_document("refresh_view")
 
-            # Technique 1: COM API Refresh (doesn't affect undo/redo)
-            try:
-                application.Refresh()
-                logger.debug("Refresh: COM Refresh executed")
-            except Exception as e:
-                logger.debug(f"COM Refresh failed: {e}")
-
-            # Technique 2: Send REDRAW command (most reliable visual update)
-            try:
-                document.SendCommand("_redraw\n")
-                logger.debug("Refresh: REDRAW command sent")
-            except Exception as e:
-                logger.debug(f"REDRAW command failed: {e}")
-
-            # Technique 3: Simulate click on CAD window (forces UI update)
-            self._simulate_autocad_click()
-
+            if application.ActiveDocument.Name != document.Name:
+                raise RuntimeError("Refusing to refresh an inactive document")
+            if document.GetVariable("CMDACTIVE") != 0:
+                raise RuntimeError("Refusing to refresh while a CAD command is active")
+            document.Regen(1)
             return True
         except Exception as e:
             logger.debug(f"refresh_view error: {e}")

@@ -15,6 +15,7 @@ from typing import Optional, Dict, Any, Callable, List, Tuple
 
 
 from core import get_supported_cads, CADConnectionError, get_config
+from adapters.cad_executor import cad_serialized
 from adapters.adapter_manager import (
     get_cad_instances,
     get_adapter,
@@ -31,7 +32,7 @@ def _refresh_cache_safe():
         from web.api import refresh_dashboard_cache
 
         refresh_dashboard_cache()
-    except Exception as e:
+    except ImportError as e:
         logger.debug(f"Dashboard cache refresh skipped: {e}")
 
 
@@ -88,7 +89,22 @@ def _status(spec: Dict[str, Any]) -> Dict[str, Any]:
     """
     instances = get_cad_instances()
     if instances:
-        return {"success": True, "status": {k: "connected" for k in instances.keys()}}
+        import os, sys, threading
+        from web.api import _cache, log_buffer
+        cache = _cache.snapshot()
+        diagnostics = {
+            "pid": os.getpid(), "python": sys.version.split()[0],
+            "executable": sys.executable, "cad_thread": threading.get_ident(),
+            "autocad_version": next(iter(instances.values())).application.Version,
+            "cache_connected": cache.get("connected", False),
+            "drawing": cache.get("current_drawing"),
+            "total_entities": cache.get("total_entities", 0),
+            "layer_names": [x["Name"] for x in cache.get("layers", [])],
+            "block_names": [x["Name"] for x in cache.get("blocks", [])],
+            "server_error_count": sum(x["level"]=="ERROR" for x in log_buffer.since(0)),
+        }
+        return {"success": True, "status": {k: "connected" for k in instances.keys()},
+                "diagnostics": diagnostics}
     return {"success": True, "status": {"all": "disconnected"}}
 
 
@@ -263,6 +279,7 @@ def register_session_tools(mcp):
     """Register unified session management tool with FastMCP."""
 
     @mcp.tool()
+    @cad_serialized
     def manage_session(
         operations: str,
     ) -> str:

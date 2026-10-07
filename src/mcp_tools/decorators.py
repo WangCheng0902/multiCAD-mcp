@@ -12,6 +12,7 @@ from typing import Callable, TypeVar, Optional, Any, Dict
 from mcp.server.fastmcp import FastMCP
 
 from core import CADOperationError
+from adapters.cad_executor import cad_serialized
 
 T = TypeVar("T")
 
@@ -114,7 +115,7 @@ def cad_tool(mcp: FastMCP, operation_name: str):
             except Exception as e:
                 raise CADOperationError(operation_name, str(e))
 
-        return mcp.tool()(wrapper)
+        return mcp.tool()(cad_serialized(wrapper))
 
     return decorator
 
@@ -179,6 +180,6 @@ def cad_tool_with_ui(
                 }
             }
 
-        return mcp.tool(**tool_kwargs)(wrapper)
+        return mcp.tool(**tool_kwargs)(cad_serialized(wrapper))
 
     return decorator

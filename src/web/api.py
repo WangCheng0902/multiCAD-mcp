@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from __version__ import __version__
 from adapters.adapter_manager import AdapterRegistry, get_active_cad_type
+from adapters.cad_executor import cad_serialized
 from core import get_supported_cads
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,8 @@ api_app = FastAPI(title="multiCAD-MCP Dashboard API")
 
 
 @api_app.post("/api/cad/export")
-async def api_cad_export() -> dict:
+@cad_serialized
+def api_cad_export() -> dict:
     """Trigger an Excel export."""
     if not _cache.get("connected"):
         return {"success": False, "detail": "No CAD connection"}
@@ -102,7 +104,8 @@ async def api_cad_export() -> dict:
 
 
 @api_app.post("/api/cad/refresh")
-async def api_cad_trigger_refresh() -> dict:
+@cad_serialized
+def api_cad_trigger_refresh() -> dict:
     """Trigger a manual refresh directly."""
     try:
         refresh_dashboard_cache()
@@ -156,6 +159,7 @@ class DashboardCache:
 _cache = DashboardCache()
 
 
+@cad_serialized
 def refresh_dashboard_cache():
     """Refresh the dashboard cache from the current CAD connection.
 
@@ -224,38 +228,46 @@ def refresh_dashboard_cache():
         except Exception:
             open_drawings = [current_drawing] if current_drawing != "None" else []
 
-        # 1. Get exact overall entity counts VERY fast (DXF SelectionSets)
-        try:
-            entity_counts = adapter.get_entity_counts()
-            total_entities = sum(entity_counts.values())
-        except Exception as e:
-            logger.warning(f"Could not get fast entity counts: {e}")
-            entity_counts = {}
-            total_entities = 0
+        # One read-only model-space pass, without creating/deleting SelectionSets.
+        # Publish a snapshot only when all counts and layer metadata are complete.
+        type_names = {"AcDbLine":"Line", "AcDbPolyline":"Polyline",
+                      "AcDb2dPolyline":"Polyline2D", "AcDb3dPolyline":"Polyline2D",
+                      "AcDbCircle":"Circle", "AcDbArc":"Arc", "AcDbText":"Text",
+                      "AcDbMText":"MText", "AcDbBlockReference":"Block",
+                      "AcDbSpline":"Spline", "AcDbEllipse":"Ellipse", "AcDbHatch":"Hatch"}
+        entity_counts = collections.Counter()
+        insert_counts = collections.Counter()
+        layer_data = []
+        for entity in adapter.document.ModelSpace:
+            name = entity.ObjectName
+            kind = "Dimension" if "Dimension" in name else type_names.get(name, name.removeprefix("AcDb"))
+            entity_counts[kind] += 1
+            layer_data.append({"Layer": entity.Layer})
+            if name == "AcDbBlockReference":
+                insert_counts[entity.Name] += 1
+        total_entities = sum(entity_counts.values())
+        if total_entities != adapter.document.ModelSpace.Count:
+            raise RuntimeError("Model-space changed during readonly cache collection")
 
         # 2. Extract detailed entities only for a sample (max 1000) to prevent UI/COM freeze
         # We no longer extract a sample here. We fetch dynamically via /api/cad/entities.
         entities_info: list[dict] = []
 
         # 3. Get Layers info
-        try:
-            layers_info = adapter.get_layers_info(entity_data=None)
-        except Exception as e:
-            logger.error(f"Failed to get layers info: {e}")
-            layers_info = _cache.get("layers", [])
+        layers_info = adapter.get_layers_info(entity_data=layer_data)
+        if len(layers_info) != adapter.document.Layers.Count:
+            raise RuntimeError("Incomplete layer cache")
 
         # 4. Get exact block insertion counts VERY fast
-        try:
-            insert_counts = adapter.get_block_counts()
-        except Exception:
-            insert_counts = {}
+        # Block insertion counts were collected in the same readonly pass.
 
         # Build rich block dicts: list_blocks() returns List[str], we need List[dict]
         try:
-            block_names: list = adapter.list_blocks()
+            block_names: list = [b.Name for b in adapter.document.Blocks
+                                if not b.IsLayout and not b.Name.startswith("*")]
         except Exception as e:
             logger.error(f"Failed to list blocks: {e}")
-            block_names = []
+            raise
         blocks_info: list = []
         for name in block_names:
             try:
@@ -266,15 +278,9 @@ def refresh_dashboard_cache():
                     info["Count"] = count
                     blocks_info.append(info)
                 else:
-                    blocks_info.append({"Name": name, "ObjectCount": 0, "Count": count})
+                    raise RuntimeError(f"Incomplete block metadata: {name}")
             except Exception:
-                blocks_info.append(
-                    {
-                        "Name": name,
-                        "ObjectCount": 0,
-                        "Count": insert_counts.get(name, 0),
-                    }
-                )
+                raise
 
         _cache.update(
             connected=True,
@@ -294,6 +300,8 @@ def refresh_dashboard_cache():
         )
     except Exception as e:
         logger.error(f"Failed to refresh dashboard cache: {e}")
+        _cache.update(connected=False, read_error=str(e))
+        raise
 
 
 # ---------- Static files ----------
@@ -330,7 +338,8 @@ async def api_health() -> dict:
 
 
 @api_app.get("/api/debug/registry")
-async def api_debug_registry() -> dict:
+@cad_serialized
+def api_debug_registry() -> dict:
     """Debug: check adapter registry and cache state."""
     registry = AdapterRegistry.get_instance()
     instances = registry.get_cad_instances()
@@ -343,7 +352,8 @@ async def api_debug_registry() -> dict:
 
 
 @api_app.post("/api/cad/switch_drawing")
-async def api_cad_switch_drawing(request: SwitchDrawingRequest) -> dict:
+@cad_serialized
+def api_cad_switch_drawing(request: SwitchDrawingRequest) -> dict:
     """Switch the active CAD drawing and trigger a cache refresh."""
     if not _cache.get("connected"):
         return {"success": False, "error": "No CAD connection"}
@@ -402,7 +412,8 @@ async def api_cad_blocks() -> dict:
 
 
 @api_app.get("/api/cad/entities")
-async def api_cad_entities(
+@cad_serialized
+def api_cad_entities(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=500, ge=1, le=2000),
     type: Optional[str] = Query(default=None),

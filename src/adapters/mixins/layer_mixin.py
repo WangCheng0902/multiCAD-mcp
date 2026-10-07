@@ -7,7 +7,7 @@ Handles all layer management operations.
 import logging
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
-from core import LayerError, ColorError
+from core import LayerError, ColorError, CADOperationError
 from mcp_tools.constants import COLOR_MAP
 
 logger = logging.getLogger(__name__)
@@ -164,60 +164,10 @@ class LayerMixin:
                     layer_name = entity.get("Layer", "0")
                     layer_counts[layer_name] = layer_counts.get(layer_name, 0) + 1
             else:
-                # Fallback: Use SelectionSets to quickly count entities per layer (O(K))
-                logger.debug("Using SelectionSets to count entities by layer")
-                import pythoncom
-                import win32com.client
-                import time
-
-                perf_start = time.perf_counter()
-
-                # Setup selection set manager helper
-                from contextlib import contextmanager
-
-                @contextmanager
-                def _temp_ss(doc, name):
-                    try:
-                        doc.SelectionSets.Item(name).Delete()
-                    except Exception:
-                        pass
-                    ss = doc.SelectionSets.Add(name)
-                    try:
-                        yield ss
-                    finally:
-                        try:
-                            ss.Delete()
-                        except Exception:
-                            pass
-
-                def to_variant_array(types, values):
-                    return win32com.client.VARIANT(types, values)
-
-                ft = to_variant_array(
-                    pythoncom.VT_ARRAY | pythoncom.VT_I2, [8]
-                )  # DXF Code 8: Layer Name
-
-                with _temp_ss(document, "MCP_LAYER_COUNTS") as ss:
-                    for layer in document.Layers:
-                        lname = layer.Name
-                        fd = to_variant_array(
-                            pythoncom.VT_ARRAY | pythoncom.VT_VARIANT, [lname]
-                        )
-                        try:
-                            ss.Clear()
-                            ss.Select(5, None, None, ft, fd)  # 5 = acSelectionSetAll
-                            count = ss.Count
-                            if count > 0:
-                                layer_counts[lname] = count
-                        except Exception as e:
-                            logger.debug(
-                                f"Failed to count entities on layer {lname}: {e}"
-                            )
-
-                elapsed = time.perf_counter() - perf_start
-                logger.info(
-                    f"[PERF] Layer counting via SelectionSets took {elapsed:.3f}s"
-                )
+                # Read-only enumeration: cache/query counts must not create SelectionSets.
+                for entity in document.ModelSpace:
+                    name = entity.Layer
+                    layer_counts[name] = layer_counts.get(name, 0) + 1
 
             # Build layer information
             for layer in document.Layers:
@@ -225,7 +175,8 @@ class LayerMixin:
                     # Get layer properties using dynamic dispatch for robustness
                     import win32com.client
 
-                    dyn_layer = win32com.client.dynamic.Dispatch(layer)
+                    # Keep the guarded COM wrapper; re-dispatch would bypass it.
+                    dyn_layer = layer
 
                     layer_color_val = 7  # Default white
                     try:
@@ -269,10 +220,12 @@ class LayerMixin:
                     logger.debug(f"Failed to get info for layer {layer.Name}: {e}")
                     continue
 
+            if len(layers_info) != document.Layers.Count:
+                raise CADOperationError("get_layers_info", "Incomplete layer metadata")
             return layers_info
         except Exception as e:
             logger.error(f"Failed to get layers info: {e}")
-            return []
+            raise CADOperationError("get_layers_info", str(e)) from e
 
     def rename_layer(self, old_name: str, new_name: str) -> bool:
         """Rename an existing layer via COM.
